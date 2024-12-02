@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 import telebot
 import openpyxl
 import time
@@ -11,7 +12,6 @@ from db.models import uday_schedule
 from db.models import users
 from telebot.apihelper import ApiTelegramException
 from telebot import types
-import logging
 
 
 logs_format = '%(asctime)s - %(filename)s:%(lineno)d - %(message)s'
@@ -32,7 +32,7 @@ def caching_decorator(func: callable) -> callable:
 
     Аргументы:
         func (callable): Декорируемая функция.
-    
+
     Возвращает:
         (callable): Декорированная функция, принимающая сообщение пользователя.
         """
@@ -51,7 +51,7 @@ def parent_of_merged_cell(cell: openpyxl.cell.cell.MergedCell) -> str:
 
     Аргументы:
         cell (openpyxl.cell.cell.MergedCell): Объединённая клетка.
-    
+
     Возвращает:
         str: Координаты родительской клетки.
     """
@@ -68,7 +68,7 @@ def cell_value(cell: Union[openpyxl.cell.cell.Cell, openpyxl.cell.cell.MergedCel
 
     Функция проверяет тип клетки, возвращает её значение если это обычная клетка, ищет родительскую клетку
     и возвращает её значение если клетка совмещённая.
-    
+
     Аргументы:
         cell Union[openpyxl.cell.cell.Cell, openpyxl.cell.cell.MergedCell]: Клетка с искомым значением.
 
@@ -186,7 +186,7 @@ def main_schedule_parse(filename: str) -> str:
 
     Аргументы:
         filename (str): Имя открываемого файла.
-    
+
     Возвращает:
         str: Сообщение об успехе или ошибке в ходе выполнения функции.
 
@@ -210,6 +210,7 @@ def main_schedule_parse(filename: str) -> str:
 
     #  удаление записей при повторной загрузке расписания
     if regular_schedule.objects.filter(date=date).exists():
+        print(1)
         regular_schedule.objects.filter(date=date).delete()
         uday_schedule.objects.filter(date=date).delete()
 
@@ -271,9 +272,9 @@ def main_schedule_parse(filename: str) -> str:
 def confirm_notification(message: telebot.types.Message, recievers: str) -> None:
     """
     Функция подтверждения содержимого рассылаемого сообщения.
-        
+
     Функция запрашивает у админа подтверждение запуска рассылки и в зависимости от ответа
-    запускает или отменяет рассылки.
+    запускает или отменяет рассылку.
 
     Аргументы:
         message (telebot.types.Message): Сообщение отправленное ранее админом.
@@ -297,16 +298,17 @@ def confirm_notification(message: telebot.types.Message, recievers: str) -> None
                          reply_markup=kb)
 
 
+@caching_decorator
 def schedule_adding(message: telebot.types.Message) -> None:
     """
     Функция получения файла с расписанием.
-    
+
     Функция получает сообщение от админа, если оно содержит .xlsx файл - вызывает функцию парсинга, иначе отправляет
     сообщение об ошибке.
 
     Аргументы:
         message (telebot.types.Message): Сообщение с файлом расписания отправленное админом.
-    
+
     Возвращает:
         None: Функция ничего не возвращает.
     """
@@ -323,6 +325,25 @@ def schedule_adding(message: telebot.types.Message) -> None:
         kb.add(types.InlineKeyboardButton('попробовать ещё раз', callback_data='add_schedule'))
         bot.send_message(message.from_user.id, 'Файл с расписанием должен быть формата .xlsx, попробуйте снова',
                          reply_markup=kb)
+
+
+@bot.message_handler(commands=['start', 'edit'])
+@caching_decorator
+def start(message: telebot.types.Message) -> None:
+    """
+    Функция обработки команд /start и /edit.
+
+    Функция отправляет пользователю в ответ сообщение с предложением заполнить данные.
+
+    Аргументы:
+        message (telebot.types.Message): Сообщение отправленное пользователем.
+
+    Возвращает:
+        None: Функция ничего не возвращает.
+    """
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton('начать', callback_data='choice'))
+    bot.send_message(message.from_user.id, 'Привет, давай определимся с твоими классом и группой', reply_markup=kb)
 
 
 @bot.message_handler(commands=['get'])
@@ -346,221 +367,323 @@ def get(message: telebot.types.Message) -> None:
         bot.send_message(message.from_user.id, 'выберите действие', reply_markup=kb)
 
 
-@bot.message_handler(commands=['start', 'edit'])
-@caching_decorator
-def start(message: telebot.types.Message) -> None:
-    """
-    Функция обработки команд /start и /edit.
-
-    Функция отправляет пользователю в ответ сообщение с предложением заполнить данные.
-
-    Аргументы:
-        message (telebot.types.Message): Сообщение отправленное пользователем.
-    
-    Возвращает:
-        None: Функция ничего не возвращает.
-    """
-    command = message.text
-    if command == '/start' and not users.objects.filter(user_id=message.from_user.id).exists() or command == '/edit':
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('начать', callback_data='choice'))
-        bot.send_message(message.from_user.id, 'Привет, давай определимся с твоими классом и группой', reply_markup=kb)
-
-
 @bot.message_handler(commands=['admin'])
-def admin_panel(message: telebot.types.Message) -> None:
+@bot.callback_query_handler(func=lambda callback: callback.data == 'back_to_admin')
+def admin_panel_access(message_or_callback: Union[telebot.types.Message, telebot.types.CallbackQuery]) -> None:
     """
     Функция админ-панели.
 
-    Функция проверяет является ли пользователь админом бота и предоставляет доступр к админ-панели если это так,
+    Функция проверяет является ли пользователь админом бота и предоставляет доступ к админ-панели если это так,
     иначе запрос пользователя игнорируется.
 
     Аргументы:
-        message (telebot.types.Message): Сообщение отправленное поьзователем.
-    
+        message_or_callback (Union[telebot.types.Message, telebot.types.CallbackQuery]):
+            Сообщение, отправленное пользователем, или обратный вызов, вызванный нажатием кнопки.
+
     Возвращает:
         None: Функция ничего не возвращает.
     """
-    if str(message.from_user.id) == os.getenv('ADMIN_ID'):
+    user_id = message_or_callback.from_user.id
+    if str(user_id) in os.getenv('ADMIN_ID').split(';'):
         kb = types.InlineKeyboardMarkup(row_width=1)
         kb.add(types.InlineKeyboardButton('Добавить расписание', callback_data='add_schedule'),
                types.InlineKeyboardButton('Сделать рассылку', callback_data='make_notification'))
-        bot.send_message(message.from_user.id, 'Добро пожаловать в админ-панель! Выберите действие на клавиатуре',
-                         reply_markup=kb)
+        if isinstance(message_or_callback, telebot.types.Message):
+            bot.send_message(user_id, 'Добро пожаловать в админ-панель! Выберите действие на клавиатуре',
+                             reply_markup=kb)
+        elif isinstance(message_or_callback, telebot.types.CallbackQuery):
+            bot.clear_step_handler_by_chat_id(message_or_callback.message.chat.id)
+            if message_or_callback.message.photo:
+                bot.delete_message(user_id, message_or_callback.message.id)
+                bot.send_message(user_id, 'Добро пожаловать в админ-панель! Выберите действие на клавиатуре',
+                                 reply_markup=kb)
+            else:
+                bot.edit_message_text('Добро пожаловать в админ-панель! Выберите действие на клавиатуре',
+                                      message_or_callback.from_user.id, message_or_callback.message.message_id,
+                                      reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda callback: True)
-def callback_message(callback: telebot.types.CallbackQuery) -> None:
+@bot.callback_query_handler(func=lambda callback: callback.data == 'choice')
+def class_num_choice(callback: telebot.types.CallbackQuery) -> None:
     """
-    Функция обработки пользовательских нажатий на кнопки.
+    Функция выбора цифры класса.
 
-    Функция отвечает на запросы пользователя, сделанные посредством нажатий кнопок.
+    Функция запрашивает у пользователя цифру его класса, создаёт callback выбора буквы класса.
 
     Аргументы:
-        callback (telebot.types.CallbackQuery): Коллбэк вызванный нажатием на кнопку.
-    
+        callback (telebot.types.CallbackQuery): callback выбора цифры класса.
+
     Возвращает:
-        None: Функция ничего не возвращает.
+        None: функция ничего не возвращает.
     """
-    # выбор цифры класса
-    if callback.data == 'choice':
-        keyboard = types.InlineKeyboardMarkup(row_width=2)
-        keyboard.add(types.InlineKeyboardButton('10', callback_data='10'),
-                     types.InlineKeyboardButton('11', callback_data='11'))
-        bot.edit_message_text('выберите класс', callback.from_user.id, callback.message.message_id,
-                              reply_markup=keyboard)
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(types.InlineKeyboardButton('10', callback_data='10'),
+                 types.InlineKeyboardButton('11', callback_data='11'))
+    bot.edit_message_text('выберите класс', callback.from_user.id, callback.message.message_id,
+                          reply_markup=keyboard)
 
-    # выбор буквы класса
-    elif callback.data == '10' or callback.data == '11':
-        cl_num = callback.data
-        classes_11 = [('В(бета)', 'Η(эта)'), ('Ζ(дзeта)', 'Θ(тета)'), ('Г(гамма)', 'Ε(эпсилон)'),
-                      ('Ι(йота)', 'К(каппа)'), ('Δ(дельта)', 'Λ(лямбда)')]
-        classes_10 = [('Μ(мю)', 'Σ(сигма)'), ('Ξ(кси)', 'Τ(тау)'), ('Ο(омикрон)', 'Φ(фи)'), ('Π(пи)', 'Х(хи)'),
-                      ('Ρ(ро)', 'Ψ(пси)')]
-        classes = classes_10 if cl_num == '10' else classes_11
-        keyboard = types.InlineKeyboardMarkup(row_width=2)
-        for cl1, cl2 in classes:
-            keyboard.add(types.InlineKeyboardButton(cl1, callback_data=f'class_letter={cl_num} {cl1.split('(')[0]}'),
-                         types.InlineKeyboardButton(cl2, callback_data=f'class_letter={cl_num} {cl2.split('(')[0]}'))
-        bot.edit_message_text('выберите букву', callback.from_user.id, callback.message.message_id,
-                              reply_markup=keyboard)
 
-    # выбор группы класса
-    elif callback.data.startswith('class_letter'):
-        cl_letter = callback.data.split('=')[1]
-        user = users.objects.get_or_create(user_id=callback.from_user.id, defaults={'class_letter': ''})[0]
-        user.class_letter = cl_letter
-        user.save(update_fields=['class_letter'])
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(types.InlineKeyboardButton('группа А', callback_data='class_group=группа А'),
-                     types.InlineKeyboardButton('группа Б', callback_data='class_group=группа Б'))
-        bot.edit_message_text('выберите группу', callback.from_user.id, callback.message.message_id,
-                              reply_markup=keyboard)
+@bot.callback_query_handler(func=lambda callback: callback.data in ('10', '11'))
+def class_letter_choice(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция выбора буквы класса.
 
-    # выбор группы на универ-день
-    elif callback.data.startswith('class_group'):
-        cl_group = callback.data.split('=')[1]
-        cl_group = 0 if cl_group == 'группа А' else 1
-        user = users.objects.get(user_id=callback.from_user.id)
-        user.group_number = cl_group
-        user.save(update_fields=['group_number'])
-        cl = user.class_letter.split()[0]
-        i, j = (6, 5) if cl == '11' else (7, 6)
-        keyboard = types.InlineKeyboardMarkup(row_width=2)
-        for i in range(1, i):
-            keyboard.add(types.InlineKeyboardButton(str(i), callback_data=f'univer_group={str(i)}'),
-                         types.InlineKeyboardButton(str(i + j), callback_data=f'univer_group={str(i + j)}'))
-        bot.edit_message_text('выберите группу универдня', callback.from_user.id, callback.message.message_id,
-                              reply_markup=keyboard)
+    Функция запрашивает у пользователя букву его класса, создаёт callback выбора группы класса.
 
-    # подтверждение данных
-    elif callback.data.startswith('univer_group'):
-        univer_group = int(callback.data.split('=')[1])
-        user = users.objects.get(user_id=callback.from_user.id)
-        user.u_group_number = univer_group
-        user.save(update_fields=['u_group_number'])
-        cl_letter, cl_group = user.class_letter, ['Гр. А', 'Гр. Б'][user.group_number]
-        kb = types.InlineKeyboardMarkup(row_width=1)
-        kb.add(types.InlineKeyboardButton('заполнить заново', callback_data='choice'),
-               types.InlineKeyboardButton('сохранить', callback_data='done'))
-        bot.edit_message_text(f'вы выбрали:\n{cl_letter} класс\n{cl_group}\n{univer_group} группа универдня',
-                              callback.from_user.id, callback.message.message_id, reply_markup=kb)
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback выбора буквы класса.
 
-    # уведомление об успешном сохранении записи
-    elif callback.data == 'done':
-        kb = types.ReplyKeyboardMarkup()
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    cl_num = callback.data
+    classes_11 = [('В(бета)', 'Η(эта)'), ('Ζ(дзeта)', 'Θ(тета)'), ('Г(гамма)', 'Ε(эпсилон)'),
+                  ('Ι(йота)', 'К(каппа)'), ('Δ(дельта)', 'Λ(лямбда)')]
+    classes_10 = [('Μ(мю)', 'Σ(сигма)'), ('Ξ(кси)', 'Τ(тау)'), ('Ο(омикрон)', 'Φ(фи)'), ('Π(пи)', 'Х(хи)'),
+                  ('Ρ(ро)', 'Ψ(пси)')]
+    classes = classes_10 if cl_num == '10' else classes_11
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    for cl1, cl2 in classes:
+        keyboard.add(types.InlineKeyboardButton(cl1, callback_data=f'class_letter={cl_num} {cl1.split('(')[0]}'),
+                     types.InlineKeyboardButton(cl2, callback_data=f'class_letter={cl_num} {cl2.split('(')[0]}'))
+    bot.edit_message_text('выберите букву', callback.from_user.id, callback.message.message_id,
+                          reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('class_letter'))
+def class_group_choice(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция выбора группы класса.
+
+    Функция запрашивает у пользователя цифру его класса, создаёт callback выбора группы на универ-день.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback выбора группы класса.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    cl_letter = callback.data.split('=')[1]
+    user = users.objects.get_or_create(user_id=callback.from_user.id, defaults={'class_letter': ''})[0]
+    user.class_letter = cl_letter
+    user.save(update_fields=['class_letter'])
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton('группа А', callback_data='class_group=группа А'),
+                 types.InlineKeyboardButton('группа Б', callback_data='class_group=группа Б'))
+    bot.edit_message_text('выберите группу', callback.from_user.id, callback.message.message_id,
+                          reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('class_group'))
+def univerday_group_choice(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция выбора группы на универ-день.
+
+    Функция запрашивает у пользователя цифру его класса, создаёт callback подтверждения введённых ранее данных.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback выбора группы на универ-день.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    cl_group = callback.data.split('=')[1]
+    cl_group = 0 if cl_group == 'группа А' else 1
+    user = users.objects.get(user_id=callback.from_user.id)
+    user.group_number = cl_group
+    user.save(update_fields=['group_number'])
+    cl = user.class_letter.split()[0]
+    i, j = (6, 5) if cl == '11' else (7, 6)
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    for i in range(1, i):
+        keyboard.add(types.InlineKeyboardButton(str(i), callback_data=f'univer_group={str(i)}'),
+                     types.InlineKeyboardButton(str(i + j), callback_data=f'univer_group={str(i + j)}'))
+    bot.edit_message_text('выберите группу универдня', callback.from_user.id, callback.message.message_id,
+                          reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('univer_group'))
+def information_confirmation(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция подтверждения данных.
+
+    Функция запрашивает подтверждение введённых ранее данных, в зависимости от ответа, сохраняет данные в бд и вызывает
+    callback уведомления об успешном сохранении данных или вызывает callback выбора буквы класса,
+    начинающий процесс заполнения данных повторно.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback подтверждения данных.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    univer_group = int(callback.data.split('=')[1])
+    user = users.objects.get(user_id=callback.from_user.id)
+    user.u_group_number = univer_group
+    user.save(update_fields=['u_group_number'])
+    cl_letter, cl_group = user.class_letter, ['Гр. А', 'Гр. Б'][user.group_number]
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton('заполнить заново', callback_data='choice'),
+           types.InlineKeyboardButton('сохранить', callback_data='done'))
+    bot.edit_message_text(f'вы выбрали:\n{cl_letter} класс\n{cl_group}\n{univer_group} группа универдня',
+                          callback.from_user.id, callback.message.message_id, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data == 'done')
+def success_notification(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция уведомления об успешном сохранении записи.
+
+    Функция уведомляет о сохранении данных о пользователе и предостовляет список доступных команд.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback уведомления об успешной загрузке.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row('/edit', '/get')
+    bot.edit_message_text('Успешно сохранено!', callback.from_user.id, callback.message.message_id)
+    bot.send_message(callback.from_user.id, '/edit - заполнить заново\n/get - получить расписание', reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data == 'add_schedule')
+def schedule_request(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция запроса файла с расписанием.
+
+    Функция запрашивает у админа .xlsx файл с расписанием и регистрирует next_step_hadler, функцию принимающую
+    сообщение с файлом.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback выбора запроса файла с расписанием.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
+    bot.edit_message_text('Отправьте файл в формате .xlsx чтобы добавить расписание', callback.from_user.id,
+                          callback.message.message_id, reply_markup=kb)
+    bot.register_next_step_handler(callback.message, schedule_adding)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data == 'make_notification')
+def notification_recievers_choice(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция выбора адресатов рассылки.
+
+    Функция запрашивает у админа адресатов рассылки и создаёт callback запроса сообщения для рассылки.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback выбора адресатов рассылки.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(types.InlineKeyboardButton('10е классы', callback_data='ntf=10'),
+           types.InlineKeyboardButton('11е классы', callback_data='ntf=11'))
+    kb.add(types.InlineKeyboardButton('отправить всем', callback_data='ntf=all'))
+    kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
+    bot.edit_message_text('выберите получателя', callback.from_user.id, callback.message.message_id,
+                          reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('ntf'))
+def notification_message_request(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция запроса сообщения для рассылки рассылки.
+
+    Функция запрашивает у админа сообщение для рассылки и регистрирует next_step_handler, функцию подтверждения
+    рассылки.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback запроса сообщения для рассылки.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    recievers = callback.data.split('=')[1]
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
+    bot.edit_message_text('Отправьте сообщение чтобы сделать рассылку', callback.from_user.id,
+                          callback.message.message_id, reply_markup=kb)
+    bot.register_next_step_handler(callback.message, confirm_notification, recievers)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('send'))
+def notification_sending(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция рассылки сообщения.
+
+    Функция выбирает из бд пользователей соответсвующих получателям сообщения и отправляет каждому сообщение.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback подтверждения рассылки.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    bot.delete_message(callback.from_user.id, callback.message.message_id)
+    recievers = users.objects.all() if callback.data.split('=')[1] == 'all' else users.objects.filter(
+        class_letter__startswith=callback.data.split('=')[1])
+    message = callback.message
+    text = message.caption.split('>сообщение:')[1] if message.photo and message.caption else ''
+    photo_bytes = bot.download_file(bot.get_file(message.photo[-1].file_id).file_path) if message.photo else None
+    for user in recievers:
+        try:
+            if photo_bytes:
+                bot.send_photo(user.user_id, caption=text, photo=photo_bytes)
+            else:
+                bot.send_message(user.user_id, message.text.split('>сообщение:')[1])
+        except ApiTelegramException as ex:
+            if ex.description == 'Forbidden: bot was blocked by the user':
+                user.delete()
+        time.sleep(0.036)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith('get_schedule'))
+def schedule_sending(callback: telebot.types.CallbackQuery) -> None:
+    """
+    Функция отправки расписания.
+
+    Функция получает из бд и отправляет пользователю расписание на выбранный день, если расписание не загружено,
+    отпарвляет соответсвующее уведомление.
+
+    Аргументы:
+        callback (telebot.types.CallbackQuery): callback запроса расписания.
+
+    Возвращает:
+        None: функция ничего не возвращает.
+    """
+    day = callback.data.split('=')[1]
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton('расписание на сегодня', callback_data='get_schedule=today'))
+    kb.add(types.InlineKeyboardButton('расписание на завтра', callback_data='get_schedule=tommorow'))
+    date = dt.date.today() if day == 'today' else dt.date.today() + dt.timedelta(days=1)
+    user = users.objects.get(user_id=callback.from_user.id)
+    uday_flag = True if user.class_letter.startswith('11') and date.weekday() == 2 or user.class_letter.startswith(
+        '10') and date.weekday() == 0 else False
+    gr_num = 0 if uday_flag else user.group_number
+    schedule_list = []
+    if uday_schedule.objects.filter(date=date).exists() and uday_flag:
+        schedule_list.append('\n\n'.join(
+            [row.lesson_info for row in uday_schedule.objects.filter(group_number=user.u_group_number, date=date)]))
+    if regular_schedule.objects.filter(date=date).exists():
+        schedule_list.append('\n\n'.join([row.lesson_info for row in
+                                         regular_schedule.objects.filter(class_letter=user.class_letter,
+                                                                         group_number=gr_num, date=date)]))
+    if schedule_list:
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
         kb.row('/edit', '/get')
-        bot.edit_message_text('Успешно сохранено!\n/edit - заполнить заново\n/get - получить расписание',
-                              callback.from_user.id, callback.message.message_id)
-
-    # получение файла с расписанием
-    elif callback.data == 'add_schedule':
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
-        bot.edit_message_text('Отправьте файл чтобы добавить расписание', callback.from_user.id,
-                              callback.message.message_id, reply_markup=kb)
-        bot.register_next_step_handler(callback.message, schedule_adding)
-
-    # возврат к админ-панели
-    elif callback.data == 'back_to_admin':
-        bot.clear_step_handler_by_chat_id(callback.message.chat.id)
-        kb = types.InlineKeyboardMarkup(row_width=1)
-        kb.add(types.InlineKeyboardButton('Добавить расписание', callback_data='add_schedule'),
-               types.InlineKeyboardButton('Сделать рассылку', callback_data='make_notification'))
-        if callback.message.photo:
-            bot.delete_message(callback.from_user.id, callback.message.id)
-            bot.send_message(callback.from_user.id,
-                             'Добро пожаловать в админ-панель! Выберите действие на клавиатуре', reply_markup=kb)
-        else:
-            bot.edit_message_text('Добро пожаловать в админ-панель! Выберите действие на клавиатуре',
-                                  callback.from_user.id, callback.message.message_id, reply_markup=kb)
-
-    # выбор адресатов рассылки
-    elif callback.data == 'make_notification':
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(types.InlineKeyboardButton('10е классы', callback_data='ntf=10'),
-               types.InlineKeyboardButton('11е классы', callback_data='ntf=11'))
-        kb.add(types.InlineKeyboardButton('отправить всем', callback_data='ntf=all'))
-        kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
-        bot.edit_message_text('выберите получателя', callback.from_user.id, callback.message.message_id,
-                              reply_markup=kb)
-
-    # запрос сообщения для рассылки
-    elif callback.data.startswith('ntf'):
-        recievers = callback.data.split('=')[1]
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('назад', callback_data='back_to_admin'))
-        bot.edit_message_text('Отправьте сообщение чтобы сделать рассылку', callback.from_user.id,
-                              callback.message.message_id, reply_markup=kb)
-        bot.register_next_step_handler(callback.message, confirm_notification, recievers)
-
-    # рассылка сообщения
-    elif callback.data.startswith('send'):
-        bot.delete_message(callback.from_user.id, callback.message.message_id)
-        recievers = users.objects.all() if callback.data.split('=')[1] == 'all' else users.objects.filter(
-            class_letter__startswith=callback.data.split('=')[1])
-        message = callback.message
-        text = message.caption.split('>сообщение:')[1] if message.photo and message.caption else ''
-        photo_bytes = bot.download_file(bot.get_file(message.photo[-1].file_id).file_path) if message.photo else None
-        for user in recievers:
-            try:
-                if photo_bytes:
-                    bot.send_photo(user.user_id, caption=text, photo=photo_bytes)
-                else:
-                    bot.send_message(user.user_id, message.text.split('>сообщение:')[1])
-            except ApiTelegramException as ex:
-                if ex.description == 'Forbidden: bot was blocked by the user':
-                    user.delete()
-            time.sleep(0.036)
-
-    # отправка расписания
-    elif callback.data.startswith('get_schedule'):
-        day = callback.data.split('=')[1]
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('расписание на сегодня', callback_data='get_schedule=today'))
-        kb.add(types.InlineKeyboardButton('расписание на завтра', callback_data='get_schedule=tommorow'))
-        date = dt.date.today() if day == 'today' else dt.date.today() + dt.timedelta(days=1)
-        user = users.objects.get(user_id=callback.from_user.id)
-        uday_flag = True if user.class_letter.startswith('11') and date.weekday() == 2 or user.class_letter.startswith(
-            '10') and date.weekday() == 0 else False
-        gr_num = 0 if uday_flag else user.group_number
-        schedule_list = []
-        if uday_schedule.objects.filter(date=date).exists() and uday_flag:
-            schedule_list.append('\n\n'.join(
-                [row.lesson_info for row in uday_schedule.objects.filter(group_number=user.u_group_number, date=date)]))
-        if regular_schedule.objects.filter(date=date).exists():
-            schedule_list.append('\n\n'.join([row.lesson_info for row in
-                                              regular_schedule.objects.filter(class_letter=user.class_letter,
-                                                                              group_number=gr_num, date=date)]))
-        if schedule_list:
-            kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            kb.row('/edit', '/get')
-            bot.send_message(callback.from_user.id, '\n\n'.join(schedule_list), reply_markup=kb)
-            bot.delete_message(callback.from_user.id, callback.message.id)
-        elif callback.message.text == 'выберите действие' or date.strftime("%d.%m") != \
-                callback.message.text.split('расписание на ')[1][:5]:
-            bot.edit_message_text(f'расписание на {date.strftime("%d.%m")} ещё не добавлено\nвыберите действие',
-                                  callback.from_user.id, callback.message.message_id, reply_markup=kb)
+        bot.send_message(callback.from_user.id, '\n\n'.join(schedule_list), reply_markup=kb)
+        bot.delete_message(callback.from_user.id, callback.message.id)
+    elif callback.message.text == 'выберите действие' or date.strftime("%d.%m") != \
+            callback.message.text.split('расписание на ')[1][:5]:
+        bot.edit_message_text(f'расписание на {date.strftime("%d.%m")} ещё не добавлено\nвыберите действие',
+                              callback.from_user.id, callback.message.message_id, reply_markup=kb)
 
 
 if __name__ == '__main__':

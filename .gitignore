@@ -1,0 +1,10 @@
+__pycache__/
+src/
+db/__pycache__
+db/migrations/
+/.env
+/admin_panel.py
+/bot_2.py
+/logs.log
+/manage.py
+/requirements.txt

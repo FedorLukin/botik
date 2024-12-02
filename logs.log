@@ -1,0 +1,1 @@
+2024-11-29 22:13:45,872 - bot_2.py:697 - HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=20)
