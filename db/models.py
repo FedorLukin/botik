@@ -7,7 +7,7 @@ init_django()
 class regular_schedule(models.Model):
     lesson_number = models.IntegerField(blank=False)
     lesson_info = models.TextField(blank=False)
-    class_letter = models.CharField(max_length=255, blank=False)
+    class_letter = models.CharField(max_length=5, blank=False)
     group_number = models.IntegerField(blank=False)
     date = models.DateField(blank=False)
 

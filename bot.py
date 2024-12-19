@@ -177,7 +177,7 @@ def uday_classes_schedule_parsing(date: dt.date, worksheet: openpyxl.worksheet.w
                                                 group_number=0, date=date)
 
 
-def main_schedule_parse(filename: str) -> str:
+def main_parsing_func(filename: str) -> str:
     """
     Основная функция парсинга расписания.
 
@@ -210,7 +210,6 @@ def main_schedule_parse(filename: str) -> str:
 
     #  удаление записей при повторной загрузке расписания
     if regular_schedule.objects.filter(date=date).exists():
-        print(1)
         regular_schedule.objects.filter(date=date).delete()
         uday_schedule.objects.filter(date=date).delete()
 
@@ -230,8 +229,6 @@ def main_schedule_parse(filename: str) -> str:
             times_10 = [cell_value(i).replace('\n', '') for i in sheet['c'][3:3 + ls_num]]
             regular_classes_schedule_parsing(date, sheet, times_10, 2, 4, 11, 23)
     except Exception as ex:
-        regular_schedule.objects.filter(date=date).delete()
-        uday_schedule.objects.filter(date=date).delete()
         logging.error(ex)
         return f'Ошибка при парсинге расписания 10-х классов!\nОшибка:\n{ex}'
 
@@ -250,8 +247,6 @@ def main_schedule_parse(filename: str) -> str:
             times_11 = [cell_value(i).replace('\n', '') for i in sheet['c'][3:11] if cell_value(i)]
             regular_classes_schedule_parsing(date, sheet, times_11, 2, 4, 12, 23)
     except Exception as ex:
-        regular_schedule.objects.filter(date=date).delete()
-        uday_schedule.objects.filter(date=date).delete()
         logging.error(ex)
         return f'Ошибка при парсинге расписания 11-х классов!\nОшибка:\n{ex}'
 
@@ -320,7 +315,7 @@ def schedule_adding(message: telebot.types.Message) -> None:
         downloaded_file = bot.download_file(file_info.file_path)
         with open(f'uploads/{file_name}', 'wb') as new_file:
             new_file.write(downloaded_file)
-        bot.send_message(message.from_user.id, main_schedule_parse(file_name), reply_markup=kb)
+        bot.send_message(message.from_user.id, main_parsing_func(file_name), reply_markup=kb)
     else:
         kb.add(types.InlineKeyboardButton('попробовать ещё раз', callback_data='add_schedule'))
         bot.send_message(message.from_user.id, 'Файл с расписанием должен быть формата .xlsx, попробуйте снова',
@@ -438,7 +433,7 @@ def class_letter_choice(callback: telebot.types.CallbackQuery) -> None:
     """
     cl_num = callback.data
     classes_11 = [('В(бета)', 'Η(эта)'), ('Ζ(дзeта)', 'Θ(тета)'), ('Г(гамма)', 'Ε(эпсилон)'),
-                  ('Ι(йота)', 'К(каппа)'), ('Δ(дельта)', 'Λ(лямбда)')]
+                  ('Ι(йота)', 'К(к аппа)'), ('Δ(дельта)', 'Λ(лямбда)')]
     classes_10 = [('Μ(мю)', 'Σ(сигма)'), ('Ξ(кси)', 'Τ(тау)'), ('Ο(омикрон)', 'Φ(фи)'), ('Π(пи)', 'Х(хи)'),
                   ('Ρ(ро)', 'Ψ(пси)')]
     classes = classes_10 if cl_num == '10' else classes_11
@@ -669,13 +664,12 @@ def schedule_sending(callback: telebot.types.CallbackQuery) -> None:
     gr_num = 0 if uday_flag else user.group_number
     schedule_list = []
     if uday_schedule.objects.filter(date=date).exists() and uday_flag:
-        schedule_list.append('\n\n'.join(
-            [row.lesson_info for row in uday_schedule.objects.filter(group_number=user.u_group_number, date=date)]))
+        schedule_list.append('\n\n'.join([row.lesson_info for row in uday_schedule.objects.filter(
+                             group_number=user.u_group_number, date=date).order_by('lesson_number')]))
     if regular_schedule.objects.filter(date=date).exists():
-        schedule_list.append('\n\n'.join([row.lesson_info for row in
-                                         regular_schedule.objects.filter(class_letter=user.class_letter,
-                                                                         group_number=gr_num, date=date)]))
-    if schedule_list:
+        schedule_list.append('\n\n'.join([row.lesson_info for row in regular_schedule.objects.filter(
+                            class_letter=user.class_letter, group_number=gr_num, date=date).order_by('lesson_number')]))
+    if schedule_list != ['']:
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
         kb.row('/edit', '/get')
         bot.send_message(callback.from_user.id, '\n\n'.join(schedule_list), reply_markup=kb)
